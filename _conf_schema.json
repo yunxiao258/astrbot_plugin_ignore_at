@@ -1,0 +1,26 @@
+{
+    "ignore_admin": {
+        "description": "管理员豁免",
+        "type": "bool",
+        "hint": "开启后，群主/管理员/WebUI 配置的管理员发出的“别人互 @”消息不会被忽略。",
+        "default": true
+    },
+    "whitelist_ids": {
+        "description": "额外豁免名单 (QQ号)",
+        "type": "string",
+        "hint": "名单内的用户发出的消息不会被忽略，多个用英文逗号(,)分隔。",
+        "default": ""
+    },
+    "ignore_at_all": {
+        "description": "同时忽略 @全体 消息",
+        "type": "bool",
+        "hint": "开启后 @全体 的消息也被视为“非本 bot 的 at”而忽略；关闭(默认)则 @全体 正常放行（视为面向全群的公告）。",
+        "default": false
+    },
+    "log_ignored": {
+        "description": "记录忽略日志",
+        "type": "bool",
+        "hint": "关闭可减少日志输出。",
+        "default": true
+    }
+}
