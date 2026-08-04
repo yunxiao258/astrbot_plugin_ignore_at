@@ -1,0 +1,5 @@
+name: astrbot_plugin_ignore_at
+version: 1.0.0
+author: Administrator
+desc: 无视他人互相 @ 的消息：别人 @ 别人（非本 bot）的消息静默忽略不响应，@ 本 bot 正常放行，管理员与白名单用户豁免。
+repo: https://github.com/AstrBotDevs/AstrBot
