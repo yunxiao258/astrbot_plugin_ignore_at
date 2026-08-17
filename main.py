@@ -82,8 +82,10 @@ class IgnoreAtPlugin(Star):
         """保存忽略统计到磁盘（失败仅告警）"""
         try:
             os.makedirs(os.path.dirname(self._stats_path), exist_ok=True)
-            with open(self._stats_path, "w", encoding="utf-8") as f:
+            tmp = self._stats_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.stats, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self._stats_path)
         except Exception as e:
             logger.warning(f"【{PLUGIN_NAME}】保存忽略统计失败: {e}")
 
