@@ -6,11 +6,17 @@
 - at 目标仅为其他人时 → 静默忽略
 - 无 at 时 → 放行（普通消息，交由默认逻辑处理）
 管理员与白名单用户豁免。
+
+v1.2.0 新增：
+- @ 统计报表：按群记录谁最常触发忽略，/atignore 报表 查看本群 Top10
+- 静默时段：quiet_hours（如 23:00-07:00，支持跨天）时段内暂停拦截、全部放行
 """
 
 import json
 import os
+import re
 import time
+from datetime import datetime
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.all import MessageChain
@@ -22,11 +28,14 @@ from astrbot.core.message.components import At
 
 PLUGIN_NAME = "astrbot_plugin_ignore_at"
 PLUGIN_AUTHOR = "Administrator"
-PLUGIN_DESC = "无视他人互相 @ 的消息"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_DESC = "无视他人互相 @ 的消息（含统计报表与静默时段）"
+PLUGIN_VERSION = "1.2.0"
 
 # 白名单解析缓存 TTL（秒）：配置修改后最多延迟该时长生效
 _WL_CACHE_TTL = 60
+
+# 静默时段格式校验：HH:MM-HH:MM
+_QUIET_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$")
 
 
 @register(PLUGIN_NAME, PLUGIN_AUTHOR, PLUGIN_DESC, PLUGIN_VERSION)
@@ -37,7 +46,8 @@ class IgnoreAtPlugin(Star):
         super().__init__(context)
         self.config = config or {}
         # 忽略统计：持久化到 plugin_data，重启不丢失
-        self.stats = {"ignored": 0}
+        # users 结构: {f"{群号}|{发送者ID}": {"name": 昵称, "count": 次数}}
+        self.stats = {"ignored": 0, "users": {}}
         self._stats_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "plugin_data",
@@ -68,13 +78,17 @@ class IgnoreAtPlugin(Star):
     # ========== 统计持久化 ==========
 
     def _load_stats(self):
-        """从磁盘加载忽略统计（结构异常时重置，不影响运行）"""
+        """从磁盘加载忽略统计（结构异常时重置，不影响运行；兼容旧版仅 ignored 键的数据）"""
         try:
             if os.path.exists(self._stats_path):
                 with open(self._stats_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict) and isinstance(data.get("ignored"), int):
-                    self.stats = {"ignored": data["ignored"]}
+                    users = data.get("users", {})
+                    self.stats = {
+                        "ignored": data["ignored"],
+                        "users": users if isinstance(users, dict) else {},
+                    }
         except Exception as e:
             logger.warning(f"【{PLUGIN_NAME}】加载忽略统计失败: {e}")
 
@@ -141,15 +155,121 @@ class IgnoreAtPlugin(Star):
             return True
         return sender_id in self._whitelist()
 
+    # ========== 静默时段（v1.2.0） ==========
+
+    def _quiet_hours(self) -> tuple[str, str] | None:
+        """解析静默时段配置（HH:MM-HH:MM，支持跨天），非法/起止相同返回 None"""
+        v = str(self.config.get("quiet_hours", "") or "").strip()
+        m = _QUIET_RE.match(v)
+        if not m:
+            return None
+        start = f"{m.group(1)}:{m.group(2)}"
+        end = f"{m.group(3)}:{m.group(4)}"
+        if start == end:
+            return None
+        return (start, end)
+
+    def _in_quiet_hours(self, now: datetime | None = None) -> bool:
+        """当前时间是否处于静默时段（时段内插件暂停拦截、全部放行）"""
+        qh = self._quiet_hours()
+        if not qh:
+            return False
+        now = now or datetime.now()
+        cur = now.strftime("%H:%M")
+        start, end = qh
+        if start < end:
+            return start <= cur < end
+        # 跨天区间（如 23:00-07:00）
+        return cur >= start or cur < end
+
+    # ========== 统计报表（v1.2.0） ==========
+
+    def _record_ignored(self, event: AstrMessageEvent, sender_id: str):
+        """记录一次忽略：总数 +1 并按群累计到用户排行（失败不影响拦截流程）"""
+        self.stats["ignored"] += 1
+        try:
+            gid = ""
+            try:
+                gid = str(event.get_group_id() or "").strip()
+            except Exception:
+                pass
+            if not gid:
+                gid = "private"
+            gkey = f"{gid}|{sender_id}"
+            users = self.stats.setdefault("users", {})
+            if not isinstance(users, dict):
+                users = self.stats["users"] = {}
+            entry = users.setdefault(gkey, {"name": "", "count": 0})
+            name = ""
+            try:
+                name = str(event.get_sender_name() or "").strip()
+            except Exception:
+                pass
+            if name and not entry.get("name"):
+                entry["name"] = name[:20]
+            entry["count"] = int(entry.get("count", 0)) + 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"【{PLUGIN_NAME}】统计记录异常: {e}")
+
+    def _report_text(self, event: AstrMessageEvent) -> str:
+        """渲染本群忽略排行报表（Top10）"""
+        try:
+            gid = str(event.get_group_id() or "").strip()
+        except Exception:
+            gid = ""
+        prefix = f"{gid or 'private'}|"
+        rows = []
+        for k, v in (self.stats.get("users") or {}).items():
+            if not isinstance(v, dict) or not k.startswith(prefix):
+                continue
+            try:
+                count = int(v.get("count", 0))
+            except (TypeError, ValueError):
+                continue
+            name = str(v.get("name") or k[len(prefix):])
+            rows.append((count, name))
+        total_users = len(rows)
+        if not rows:
+            return (
+                "📊 忽略排行报表\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📭 本群暂无忽略记录\n被忽略的互 @ 消息会自动计入排行"
+            )
+        rows.sort(key=lambda r: -r[0])
+        medals = ["🥇", "🥈", "🥉"]
+        lines = [f"📊 忽略排行报表（共 {total_users} 人上榜 · 累计 {self.stats['ignored']} 条）",
+                 "━━━━━━━━━━━━━━━━━━━━━━"]
+        for i, (count, name) in enumerate(rows[:10]):
+            icon = medals[i] if i < 3 else f"{i + 1}."
+            display = name if len(name) <= 12 else name[:11] + "…"
+            lines.append(f"{icon} {display} · 被忽略 {count} 次")
+        top = rows[0]
+        lines.append(f"👑 互 @ 大户：{top[1]}（{top[0]} 次）")
+        return "\n".join(lines)
+
     @filter.command("atignore", alias={"忽略状态"})
     async def atignore_status(self, event: AstrMessageEvent):
-        """查看本插件拦截统计：/atignore"""
+        """查看本插件状态：/atignore 状态；/atignore 报表 查看忽略排行"""
+        args = str(getattr(event, "message_str", "") or "").strip()
+        m = re.match(r"^[\\/／]?\s*(?:atignore|忽略状态)\s*(.*)$", args, re.S)
+        sub = (m.group(1) or "").strip() if m else ""
+        if sub in ("报表", "排行", "排行榜"):
+            return event.chain_result([Plain(self._report_text(event))])
+        quiet = self._quiet_hours()
+        in_quiet = self._in_quiet_hours()
+        quiet_line = (
+            f"- 静默时段: {quiet[0]}-{quiet[1]}（{'当前处于静默中，暂停拦截' if in_quiet else '当前不在静默时段'}）"
+            if quiet
+            else "- 静默时段: 未启用"
+        )
         text = (
-            "【无视互 @ 插件】\n"
+            "【无视互 @ 插件 v1.2.0】\n"
             f"- 已忽略他人互 @ 消息: {self.stats['ignored']} 条\n"
             f"- 管理员豁免: {'开启' if self._cfg_bool('ignore_admin', True) else '关闭'}\n"
             f"- 忽略 @全体: {'开启' if self._cfg_bool('ignore_at_all', False) else '关闭'}\n"
-            f"- 白名单: {', '.join(sorted(self._whitelist())) or '无'}"
+            f"{quiet_line}\n"
+            f"- 白名单: {', '.join(sorted(self._whitelist())) or '无'}\n"
+            "发送 /atignore 报表 查看本群忽略排行"
         )
         return event.chain_result([Plain(text)])
 
@@ -158,6 +278,9 @@ class IgnoreAtPlugin(Star):
         """仅处理群聊：他人互 @（at 目标不含本 bot）的消息静默忽略"""
         try:
             if event.is_private_chat():
+                return
+            # 静默时段内暂停拦截，全部放行
+            if self._in_quiet_hours():
                 return
             sender_id = str(event.get_sender_id())
             if not sender_id:
@@ -170,7 +293,7 @@ class IgnoreAtPlugin(Star):
                 return
             if self._is_exempt(event, sender_id):
                 return
-            self.stats["ignored"] += 1
+            self._record_ignored(event, sender_id)
             self._save_stats()
             if self._cfg_bool("log_ignored", True):
                 logger.info(

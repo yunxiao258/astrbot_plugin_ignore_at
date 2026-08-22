@@ -22,5 +22,11 @@
         "type": "bool",
         "hint": "关闭可减少日志输出。",
         "default": true
+    },
+    "quiet_hours": {
+        "description": "静默时段（HH:MM-HH:MM，支持跨天如 23:00-07:00）",
+        "type": "string",
+        "hint": "该时段内插件暂停拦截、所有消息正常放行；留空表示不启用。非法格式自动视为未启用。",
+        "default": ""
     }
 }
