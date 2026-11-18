@@ -27,9 +27,9 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.message.components import At
 
 PLUGIN_NAME = "astrbot_plugin_ignore_at"
-PLUGIN_AUTHOR = "Administrator"
+PLUGIN_AUTHOR = "云晓"
 PLUGIN_DESC = "无视他人互相 @ 的消息（含统计报表与静默时段）"
-PLUGIN_VERSION = "1.2.0"
+PLUGIN_VERSION = "1.2.1"
 
 # 白名单解析缓存 TTL（秒）：配置修改后最多延迟该时长生效
 _WL_CACHE_TTL = 60
@@ -253,6 +253,24 @@ class IgnoreAtPlugin(Star):
         args = str(getattr(event, "message_str", "") or "").strip()
         m = re.match(r"^[\\/／]?\s*(?:atignore|忽略状态)\s*(.*)$", args, re.S)
         sub = (m.group(1) or "").strip() if m else ""
+        if sub in ("帮助", "help", "?"):
+            return event.chain_result([Plain(
+                f"【无视互 @ 插件 v{PLUGIN_VERSION}】\n"
+                "- /atignore（或 /忽略状态）：查看拦截统计与配置状态\n"
+                "- /atignore 报表：查看本群互 @ 忽略排行 Top10\n"
+                "- /atignore 清空：清空累计忽略统计（管理员）\n"
+                "- /atignore 帮助：显示本帮助"
+            )])
+        if sub in ("清空", "重置", "clear", "reset"):
+            try:
+                is_adm = bool(event.is_admin())
+            except Exception:
+                is_adm = False
+            if not is_adm:
+                return event.chain_result([Plain("【无视互 @ 插件】仅管理员可清空统计")])
+            self.stats = {"ignored": 0, "users": {}}
+            self._save_stats()
+            return event.chain_result([Plain("【无视互 @ 插件】已清空忽略统计数据")])
         if sub in ("报表", "排行", "排行榜"):
             return event.chain_result([Plain(self._report_text(event))])
         quiet = self._quiet_hours()
@@ -263,13 +281,13 @@ class IgnoreAtPlugin(Star):
             else "- 静默时段: 未启用"
         )
         text = (
-            "【无视互 @ 插件 v1.2.0】\n"
+            f"【无视互 @ 插件 v{PLUGIN_VERSION}】\n"
             f"- 已忽略他人互 @ 消息: {self.stats['ignored']} 条\n"
             f"- 管理员豁免: {'开启' if self._cfg_bool('ignore_admin', True) else '关闭'}\n"
             f"- 忽略 @全体: {'开启' if self._cfg_bool('ignore_at_all', False) else '关闭'}\n"
             f"{quiet_line}\n"
             f"- 白名单: {', '.join(sorted(self._whitelist())) or '无'}\n"
-            "发送 /atignore 报表 查看本群忽略排行"
+            "发送 /atignore 报表 查看本群排行，/atignore 帮助 查看所有指令"
         )
         return event.chain_result([Plain(text)])
 
@@ -302,3 +320,7 @@ class IgnoreAtPlugin(Star):
             event.stop_event()
         except Exception as e:  # noqa: BLE001
             logger.exception(f"处理他人互 @ 消息异常: {e}")
+
+    async def terminate(self):
+        """插件卸载时持久化统计"""
+        self._save_stats()

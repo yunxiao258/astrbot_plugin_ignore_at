@@ -1,5 +1,7 @@
 ﻿name: astrbot_plugin_ignore_at
-version: 1.2.0
-author: Administrator
+display_name: 无视他人互@
+version: 1.2.1
+author: 云晓
 desc: 无视他人互相 @ 的消息：别人 @ 别人（非本 bot）的消息静默忽略不响应，@ 本 bot 正常放行，管理员与白名单用户豁免；支持忽略排行报表与静默时段。
+help: 发送 /atignore（或 /忽略状态）查看状态；/atignore 报表 查看本群互 @ 忽略排行；/atignore 清空 清空统计（管理员）；/atignore 帮助 查看帮助
 repo: https://github.com/yunxiao258/astrbot_plugin_ignore_at

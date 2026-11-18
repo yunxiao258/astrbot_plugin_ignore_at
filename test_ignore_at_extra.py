@@ -10,7 +10,7 @@ import unittest
 from datetime import datetime
 from unittest import mock
 
-sys.path.insert(0, r"D:\astrbot\data\plugins")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from astrbot.api.message_components import At  # noqa: E402
 from astrbot_plugin_ignore_at.main import IgnoreAtPlugin  # noqa: E402
@@ -209,6 +209,21 @@ class TestQuietHoursInHandler(unittest.TestCase):
         self.assertTrue(ev.stopped)
         self.assertEqual(p.stats["ignored"], 1)
         self.assertEqual(p.stats["users"]["123|y"]["count"], 1)
+
+    def test_help_clear_and_terminate(self):
+        p, _ = make_plugin()
+        r_help = run(p.atignore_status(FakeEvent("/atignore 帮助")))
+        self.assertIn("/atignore 报表", r_help[0].text)
+        self.assertIn("/atignore 清空", r_help[0].text)
+        p.stats = {"ignored": 3, "users": {"123|u1": {"name": "a", "count": 3}}}
+        r_deny = run(p.atignore_status(FakeEvent("/atignore 清空", is_admin=False)))
+        self.assertIn("仅管理员", r_deny[0].text)
+        self.assertEqual(p.stats["ignored"], 3)
+        r_ok = run(p.atignore_status(FakeEvent("/atignore 清空", is_admin=True)))
+        self.assertIn("已清空", r_ok[0].text)
+        self.assertEqual(p.stats["ignored"], 0)
+        self.assertEqual(p.stats["users"], {})
+        run(p.terminate())
 
 
 if __name__ == "__main__":
