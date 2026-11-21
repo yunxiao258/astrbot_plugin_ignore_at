@@ -1,4 +1,4 @@
-﻿"""无视他人互相 @ 的消息插件
+"""无视他人互相 @ 的消息插件
 
 场景：bot 开启群聊全响应时，别人 @ 别人（如 A 发"@B 吃饭去"）的消息
 也会触发 AI 回复，造成打扰。本插件检测群消息中的 at 段：
@@ -29,7 +29,12 @@ from astrbot.core.message.components import At
 PLUGIN_NAME = "astrbot_plugin_ignore_at"
 PLUGIN_AUTHOR = "云晓"
 PLUGIN_DESC = "无视他人互相 @ 的消息（含统计报表与静默时段）"
-PLUGIN_VERSION = "1.2.1"
+try:
+    from .hub_bridge import HUB_PROTOCOL_VERSION, emit_hub_event
+except ImportError:
+    from hub_bridge import HUB_PROTOCOL_VERSION, emit_hub_event
+
+PLUGIN_VERSION = "1.3.0"
 
 # 白名单解析缓存 TTL（秒）：配置修改后最多延迟该时长生效
 _WL_CACHE_TTL = 60
@@ -40,6 +45,7 @@ _QUIET_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$")
 
 @register(PLUGIN_NAME, PLUGIN_AUTHOR, PLUGIN_DESC, PLUGIN_VERSION)
 class IgnoreAtPlugin(Star):
+    HUB_PROTOCOL_VERSION = HUB_PROTOCOL_VERSION
     """添加了忽略别人 @ 别人（非本 bot）的消息，管理员与白名单用户豁免。"""
 
     def __init__(self, context: Context, config: AstrBotConfig = None):
@@ -208,6 +214,7 @@ class IgnoreAtPlugin(Star):
             if name and not entry.get("name"):
                 entry["name"] = name[:20]
             entry["count"] = int(entry.get("count", 0)) + 1
+            emit_hub_event(PLUGIN_NAME, "ignore_at.blocked", {"group_id": gid, "user_id": sender_id, "nickname": name}, self.context)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"【{PLUGIN_NAME}】统计记录异常: {e}")
 
@@ -324,3 +331,25 @@ class IgnoreAtPlugin(Star):
     async def terminate(self):
         """插件卸载时持久化统计"""
         self._save_stats()
+
+    def hub_status(self) -> dict:
+        return {
+            "version": PLUGIN_VERSION,
+            "status": "online",
+            "metrics": {"累计忽略": int(self.stats.get("ignored", 0)), "共享Bot数": len(getattr(self, "_hub_extra_bots", set()))},
+            "actions": ["get_stats", "sync_bot_ids"],
+        }
+
+    async def hub_action(self, action: str, params: dict | None = None) -> dict:
+        p = params or {}
+        if action == "get_stats":
+            return {"ok": True, "data": dict(self.stats)}
+        if action == "sync_bot_ids":
+            ids = [str(x).strip() for x in (p.get("bot_ids") or []) if str(x).strip()]
+            if p.get("bot_id"):
+                ids.append(str(p["bot_id"]).strip())
+            if not hasattr(self, "_hub_extra_bots"):
+                self._hub_extra_bots = set()
+            self._hub_extra_bots.update(ids)
+            return {"ok": True, "data": {"synced_bots": sorted(self._hub_extra_bots)}}
+        return {"ok": False, "error": f"不支持的动作：{action}"}
