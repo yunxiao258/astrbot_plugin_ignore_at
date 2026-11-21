@@ -19,7 +19,6 @@ import time
 from datetime import datetime
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.all import MessageChain
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.event.filter import EventMessageType
 from astrbot.api.message_components import Plain
@@ -34,7 +33,7 @@ try:
 except ImportError:
     from hub_bridge import HUB_PROTOCOL_VERSION, emit_hub_event
 
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.3.1"
 
 # 白名单解析缓存 TTL（秒）：配置修改后最多延迟该时长生效
 _WL_CACHE_TTL = 60
@@ -156,7 +155,9 @@ class IgnoreAtPlugin(Star):
         return wl
 
     def _is_exempt(self, event: AstrMessageEvent, sender_id: str) -> bool:
-        """豁免：管理员（默认开）或白名单成员"""
+        """豁免：管理员（默认开）或白名单成员；中枢同步的已知 Bot 永不豁免"""
+        if sender_id and sender_id in getattr(self, "_hub_extra_bots", set()):
+            return False
         if self._cfg_bool("ignore_admin", True) and event.is_admin():
             return True
         return sender_id in self._whitelist()
@@ -294,6 +295,7 @@ class IgnoreAtPlugin(Star):
             f"- 忽略 @全体: {'开启' if self._cfg_bool('ignore_at_all', False) else '关闭'}\n"
             f"{quiet_line}\n"
             f"- 白名单: {', '.join(sorted(self._whitelist())) or '无'}\n"
+            f"- 中枢共享 Bot 名单: {len(getattr(self, '_hub_extra_bots', set()))} 个\n"
             "发送 /atignore 报表 查看本群排行，/atignore 帮助 查看所有指令"
         )
         return event.chain_result([Plain(text)])
